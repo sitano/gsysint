@@ -10,6 +10,7 @@ func TestGetG(t *testing.T) {
 	}
 
 	t.Log("*g =", g)
+	t.Log("g =", (*G)(g))
 }
 
 func TestGetM(t *testing.T) {
@@ -20,4 +21,5 @@ func TestGetM(t *testing.T) {
 	}
 
 	t.Log("*m =", m)
+	t.Log("m =", (*M)(m))
 }
