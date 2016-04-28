@@ -1,6 +1,8 @@
 package gsysint
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestGetG(t *testing.T) {
 	g := GetG()
