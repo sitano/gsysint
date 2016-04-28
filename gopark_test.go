@@ -32,3 +32,20 @@ func TestPark(t *testing.T) {
 
 	w.Wait()
 }
+
+func TestParkLock(t *testing.T) {
+	var gp unsafe.Pointer
+
+	l := &Mutex{}
+	go func() {
+		Lock(l)
+		atomic.StorePointer(&gp, GetG())
+		GoParkUnlock(l, "go (block)", TraceEvGoBlock, 1)
+	}()
+
+	runtime.Gosched()
+
+	Lock(l)
+	GoReady((*G)(gp), 1)
+	Unlock(l)
+}
