@@ -13,6 +13,6 @@ TEXT ·GetG(SB),NOSPLIT,$0-4
 TEXT ·GetM(SB),NOSPLIT,$0-4
 	get_tls(CX)
 	MOVL	g(CX), AX
-	MOVL	g_m-4(AX), BX
+	MOVL	g_m(AX), BX
 	MOVL	BX, gp+0(FP)
 	RET

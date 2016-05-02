@@ -1,10 +1,10 @@
 package gsysint
 
 import (
-	"testing"
-	"sync"
 	"runtime"
+	"sync"
 	"sync/atomic"
+	"testing"
 	"unsafe"
 )
 
