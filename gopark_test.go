@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"unsafe"
+	"runtime/pprof"
+	"bytes"
 )
 
 func TestPark(t *testing.T) {
@@ -28,7 +30,9 @@ func TestPark(t *testing.T) {
 		t.Fatalf("GetG() returned nil pointer to the g structure")
 	}
 
+	Lock(l)
 	GoReady((*G)(gp), 1)
+	Unlock(l)
 
 	w.Wait()
 }
@@ -36,16 +40,18 @@ func TestPark(t *testing.T) {
 func TestParkLock(t *testing.T) {
 	var gp unsafe.Pointer
 
-	l := &Mutex{}
 	go func() {
-		Lock(l)
 		atomic.StorePointer(&gp, GetG())
-		GoParkUnlock(l, "go (block)", TraceEvGoBlock, 1)
+		GoPark(func(g *G, p unsafe.Pointer) bool {
+			return true
+		}, nil, "go (block)", TraceEvGoBlock, 1)
 	}()
 
 	runtime.Gosched()
 
-	Lock(l)
+	stack := &bytes.Buffer{}
+	pprof.Lookup("goroutine").WriteTo(stack, 1)
+	t.Log(stack.String())
+
 	GoReady((*G)(gp), 1)
-	Unlock(l)
 }

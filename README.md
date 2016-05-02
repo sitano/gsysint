@@ -69,6 +69,8 @@ intended to minimize latency.
 Example
 =======
 
+Demonstration of goroutine parking with mutex unlocking.
+
 ```golang
 
 var gp unsafe.Pointer
@@ -81,6 +83,8 @@ go func() {
 }()
 
 runtime.Gosched()
+
+pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 
 Lock(l)
 GoReady((*G)(gp), 1)
