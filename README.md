@@ -1,12 +1,69 @@
 # gsysint
-Go (as of 1.6) system internals
+
+Golang (as of 1.12.5) runtime internals that gives you an access to internal scheduling primitives.
+(for learning purposes)
 
 Features
 ========
 
-* `g` and `m` internal structures access
+* `g` and `m` internal structures access (read goroutine id)
 * goroutines native parking / unparking
-* internal locks
+* internal spin lock
+
+Examples
+=======
+
+Get goroutine id:
+
+	g.CurG().GoID
+	
+Park goroutine the simple way:
+
+    var p Park
+    p.Set()
+    p.Park(nil)
+    
+Park goroutine detailed (simple):
+
+    w.Add(1)
+    go func() {
+        p.Set()
+        p.Park(nil)
+        w.Done()
+    }()
+    runtime.Gosched()
+    // unpark goroutine and mark as ready
+    p.Ready()
+    w.Wait()
+    
+Park goroutine harder with mutex release on park:
+
+    var gp unsafe.Pointer
+    
+    w := sync.WaitGroup{}
+    w.Add(1)
+    
+    l := &g.Mutex{}
+    go func() {
+        atomic.StorePointer(&gp, g.GetG())
+        Lock(l)
+        // park
+        GoParkUnlock(l, g.WaitReasonZero, trace.TraceEvNone, 1) // actual park
+        w.Done()
+    }()
+
+    runtime.Gosched()
+
+    if gp == nil {
+        t.Fatalf("GetG() returned nil pointer to the g structure")
+    }
+
+    Lock(l)
+    // unpark goroutine and mark as ready
+    GoReady((*g.G)(gp), 1)
+    Unlock(l)
+
+    w.Wait()
 
 Scheduling details
 ==================
@@ -66,28 +123,7 @@ If there was no contention on next run slot on the `p`, `goready` can effectivel
 bring goroutine back to life omitting long passing through the run queues what
 intended to minimize latency.
 
-Example
-=======
+Author
+===
 
-Demonstration of goroutine parking with mutex unlocking.
-
-```golang
-
-var gp unsafe.Pointer
-
-l := &Mutex{}
-go func() {
-    Lock(l)
-    atomic.StorePointer(&gp, GetG())
-    GoParkUnlock(l, "go (block)", TraceEvGoBlock, 1)
-}()
-
-runtime.Gosched()
-
-pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
-
-Lock(l)
-GoReady((*G)(gp), 1)
-Unlock(l)
-
-```
+Ivan Prisyazhnyy, @john.koepi, 2019

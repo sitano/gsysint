@@ -1,8 +1,7 @@
-package gsysint
+package g
 
 import (
 	"testing"
-	"fmt"
 )
 
 func TestGetG(t *testing.T) {
@@ -13,7 +12,11 @@ func TestGetG(t *testing.T) {
 	}
 
 	t.Log("*g =", g)
-	t.Log("g =", fmt.Sprintf("%#v", (*G)(g)))
+	// t.Log("g =", fmt.Sprintf("%#v", (*G)(g)))
+}
+
+func TestGetGID(t *testing.T) {
+	t.Log("goroutine id = ", CurG().GoID)
 }
 
 func TestGetM(t *testing.T) {
@@ -24,5 +27,5 @@ func TestGetM(t *testing.T) {
 	}
 
 	t.Log("*m =", m)
-	t.Log("m =", fmt.Sprintf("%#v", (*M)(m)))
+	// t.Log("m =", fmt.Sprintf("%#v", (*M)(m)))
 }

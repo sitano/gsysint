@@ -1,57 +1,88 @@
 package gsysint
 
 import (
+	"bytes"
 	"runtime"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"unsafe"
-	"runtime/pprof"
-	"bytes"
+
+	"github.com/sitano/gsysint/g"
+	"github.com/sitano/gsysint/trace"
 )
 
 func TestPark(t *testing.T) {
-	var gp unsafe.Pointer
+	t.Run("raw api park with unlock", func(t *testing.T) {
+		var gp unsafe.Pointer
 
-	w := sync.WaitGroup{}
-	w.Add(1)
+		w := sync.WaitGroup{}
+		w.Add(1)
 
-	l := &Mutex{}
-	go func() {
-		atomic.StorePointer(&gp, GetG())
+		l := &g.Mutex{}
+		go func() {
+			atomic.StorePointer(&gp, g.GetG())
+			Lock(l)
+			// park
+			GoParkUnlock(l, g.WaitReasonZero, trace.TraceEvNone, 1) // actual park
+			w.Done()
+		}()
+
+		runtime.Gosched()
+
+		if gp == nil {
+			t.Fatalf("GetG() returned nil pointer to the g structure")
+		}
+
 		Lock(l)
-		GoParkUnlock(l, "go (block)", TraceEvGoBlock, 1)
-		w.Done()
-	}()
+		// unpark goroutine and mark as ready
+		GoReady((*g.G)(gp), 1)
+		Unlock(l)
 
-	runtime.Gosched()
+		w.Wait()
+	})
 
-	if gp == nil {
-		t.Fatalf("GetG() returned nil pointer to the g structure")
-	}
+	t.Run("simple api park with unlock", func(t *testing.T) {
+		var p Park
+		var m g.Mutex
+		var w sync.WaitGroup
 
-	Lock(l)
-	GoReady((*G)(gp), 1)
-	Unlock(l)
+		w.Add(1)
+		go func() {
+			p.Set()
+			Lock(&m)
+			// park
+			p.ParkUnlock(&m)
+			w.Done()
+		}()
 
-	w.Wait()
+		runtime.Gosched()
+
+		Lock(&m)
+		// unpark goroutine and mark as ready
+		p.Ready()
+		Unlock(&m)
+
+		w.Wait()
+	})
 }
 
 func TestParkLock(t *testing.T) {
 	var gp unsafe.Pointer
 
 	go func() {
-		atomic.StorePointer(&gp, GetG())
-		GoPark(func(g *G, p unsafe.Pointer) bool {
+		atomic.StorePointer(&gp, g.GetG())
+		GoPark(func(g *g.G, p unsafe.Pointer) bool {
 			return true
-		}, nil, "go (block)", TraceEvGoBlock, 1)
+		}, nil, g.WaitReasonZero, trace.TraceEvNone, 1)
 	}()
 
 	runtime.Gosched()
 
 	stack := &bytes.Buffer{}
-	pprof.Lookup("goroutine").WriteTo(stack, 1)
+	_ = pprof.Lookup("goroutine").WriteTo(stack, 1)
 	t.Log(stack.String())
 
-	GoReady((*G)(gp), 1)
+	GoReady((*g.G)(gp), 1)
 }
