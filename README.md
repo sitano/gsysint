@@ -15,8 +15,12 @@ Examples
 
 Get goroutine id:
 
-	g.CurG().GoID
-	
+    g.CurG().GoID
+    
+    or
+    
+    GIDFromStackTrace()
+
 Park goroutine the simple way:
 
     var p Park

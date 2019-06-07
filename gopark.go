@@ -5,7 +5,6 @@ import (
 	"unsafe"
 
 	"github.com/sitano/gsysint/trace"
-
 	"github.com/sitano/gsysint/g"
 )
 
