@@ -31,13 +31,13 @@ func TestPark(t *testing.T) {
 
 		runtime.Gosched()
 
-		if gp == nil {
+		if atomic.LoadPointer(&gp) == nil {
 			t.Fatalf("GetG() returned nil pointer to the g structure")
 		}
 
 		Lock(l)
 		// unpark goroutine and mark as ready
-		GoReady((*g.G)(gp), 1)
+		GoReady((*g.G)(atomic.LoadPointer(&gp)), 1)
 		Unlock(l)
 
 		w.Wait()

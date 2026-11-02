@@ -131,3 +131,14 @@ Author
 ===
 
 Ivan Prisyazhnyy, @john.koepi, 2019
+
+TODO
+===
+
+- `go test -race` crashes with `SIGSEGV addr=0x10` (on the g0/m0 stack) in
+  `TestPark/raw api park with unlock`, inside the `GoParkUnlock` path. Not investigated;
+  probably runtime internals not matching the race build.
+- Non-race flake: whole package once failed with a SIGSEGV on `go test -count=3 .`
+  (`-run TestPark -count=3` passed). The failing test is not identified.
+- `TestPark` relies on a single `runtime.Gosched()` to let the goroutine publish `gp`
+  before the nil check. Replace with a channel / `WaitGroup` handshake.
