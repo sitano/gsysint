@@ -6,33 +6,35 @@
 
 package g
 
-// Package time knows the layout of this structure.
-// If this struct changes, adjust ../time/sleep.go:/runtimeTimer.
-// For GOOS=nacl, package syscall knows the layout of this structure.
-// If this struct changes, adjust ../syscall/net_nacl.go:/runtimeTimer.
+import (
+	"unsafe"
+)
+
+// Timer is the runtime timer of go1.27.
+// Package time knows the layout of the user visible part of this structure.
 type Timer struct {
-	TB *TimersBucket // the bucket the timer lives in
-	I  int           // heap index
+	mu Mutex
+
+	astate uint8 // atomic copy of state bits at last unlock
+	state  uint8 // state bits
+	isChan bool  // timer has a channel; immutable; can be read without lock
+	isFake bool  // timer is using fake time; immutable; can be read without lock
+
+	blocked uint32 // number of goroutines blocked on timer's channel
+	rand    uint32 // randomizes order of timers at same instant; only set when isFake
 
 	// Timer wakes up at when, and then at when+period, ... (period > 0 only)
-	// each time calling f(arg, now) in the timer goroutine, so f must be
+	// each time calling f(arg, seq, delay) in the timer goroutine, so f must be
 	// a well-behaved function and not block.
 	When   int64
 	Period int64
-	F      func(interface{}, uintptr)
-	Arg    interface{}
+	F      func(arg any, seq uintptr, delay int64)
+	Arg    any
 	Seq    uintptr
-}
 
-//go:notinheap
-type TimersBucket struct {
-	lock         Mutex
-	gp           *G
-	created      bool
-	sleeping     bool
-	rescheduling bool
-	sleepUntil   int64
-	waitnote     Note
-	t            []*Timer
-}
+	ts unsafe.Pointer // *timers
 
+	sendLock Mutex
+
+	isSending int32
+}

@@ -25,7 +25,7 @@ func TestPark(t *testing.T) {
 			atomic.StorePointer(&gp, g.GetG())
 			Lock(l)
 			// park
-			GoParkUnlock(l, g.WaitReasonZero, trace.TraceEvNone, 1) // actual park
+			GoParkUnlock(l, g.WaitReasonZero, trace.BlockGeneric, 1) // actual park
 			w.Done()
 		}()
 
@@ -75,7 +75,7 @@ func TestParkLock(t *testing.T) {
 		atomic.StorePointer(&gp, g.GetG())
 		GoPark(func(g *g.G, p unsafe.Pointer) bool {
 			return true
-		}, nil, g.WaitReasonZero, trace.TraceEvNone, 1)
+		}, nil, g.WaitReasonZero, trace.BlockGeneric, 1)
 	}()
 
 	runtime.Gosched()

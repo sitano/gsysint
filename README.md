@@ -1,6 +1,6 @@
 # gsysint
 
-Golang (as of 1.12.5) runtime internals that gives you an access to internal scheduling primitives.
+Golang (as of 1.27.2, amd64/386/arm64) runtime internals that gives you an access to internal scheduling primitives.
 (for learning purposes)
 
 Features

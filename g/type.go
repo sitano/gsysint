@@ -6,23 +6,22 @@
 
 package g
 
+import "unsafe"
+
 // tflag is documented in reflect/type.go.
-//
-// tflag values must be kept in sync with copies in:
-//	cmd/compile/internal/gc/reflect.go
-//	cmd/link/internal/ld/decodesym.go
-//	reflect/type.go
+// Mirrors internal/abi.TFlag.
 type tflag uint8
 
 const (
-	tflagUncommon  tflag = 1 << 0
-	tflagExtraStar tflag = 1 << 1
-	tflagNamed     tflag = 1 << 2
+	tflagUncommon       tflag = 1 << 0
+	tflagExtraStar      tflag = 1 << 1
+	tflagNamed          tflag = 1 << 2
+	tflagRegularMemory  tflag = 1 << 3
+	tflagGCMaskOnDemand tflag = 1 << 4
+	tflagDirectIface    tflag = 1 << 5
 )
 
-// Needs to be in sync with ../cmd/link/internal/ld/decodesym.go:/^func.commonsize,
-// ../cmd/compile/internal/gc/reflect.go:/^func.dcommontype and
-// ../reflect/type.go:/^type.rtype.
+// Type mirrors internal/abi.Type (runtime._type).
 type Type struct {
 	size       uintptr
 	ptrdata    uintptr // size of memory prefix holding all pointers
@@ -31,10 +30,10 @@ type Type struct {
 	align      uint8
 	fieldalign uint8
 	kind       uint8
-	alg        *TypeAlg
+	// function for comparing objects of this type
+	// (ptr to object A, ptr to object B) -> ==?
+	equal func(unsafe.Pointer, unsafe.Pointer) bool
 	// gcdata stores the GC type data for the garbage collector.
-	// If the KindGCProg bit is set in kind, gcdata is a GC program.
-	// Otherwise it is a ptrmask bitmap. See mbitmap.go for details.
 	gcdata    *byte
 	str       nameOff
 	ptrToThis typeOff

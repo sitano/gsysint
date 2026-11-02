@@ -1,4 +1,4 @@
-// Package g provides access to the runtime structures of go1.12.5
+// Package g provides access to the runtime structures of go1.27.2
 // that participate in organization of goroutines scheduling.
 //
 // On scheduling check:
@@ -6,11 +6,11 @@
 // - [details](https://golang.org/s/go11sched)
 //
 // Mainly this package gives you an access to the G and P structures:
-// - G - goroutine.
-// - M - worker thread, or machine.
-// - P - processor, a resource that is required to execute Go code.
-//       M must have an associated P to execute Go code, however it can be
-//       blocked or in a syscall w/o an associated P.
+//   - G - goroutine.
+//   - M - worker thread, or machine.
+//   - P - processor, a resource that is required to execute Go code.
+//     M must have an associated P to execute Go code, however it can be
+//     blocked or in a syscall w/o an associated P.
 package g
 
 import "unsafe"

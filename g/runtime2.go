@@ -70,6 +70,14 @@ const (
 	// stack is owned by the goroutine that put it in _Gcopystack.
 	_Gcopystack // 8
 
+	// _Gpreempted means this goroutine stopped itself for a
+	// suspendG preemption. It is like _Gwaiting, but nothing is
+	// yet responsible for ready()ing it.
+	_Gpreempted // 9
+
+	// _Gleaked represents a leaked goroutine caught by the GC.
+	_Gleaked // 10
+
 	// _Gscan combined with one of the above states other than
 	// _Grunning indicates that GC is scanning the stack. The
 	// goroutine is not executing user code and the stack is owned
@@ -81,18 +89,19 @@ const (
 	//
 	// atomicstatus&~Gscan gives the state the goroutine will
 	// return to when the scan completes.
-	_Gscan         = 0x1000
-	_Gscanrunnable = _Gscan + _Grunnable // 0x1001
-	_Gscanrunning  = _Gscan + _Grunning  // 0x1002
-	_Gscansyscall  = _Gscan + _Gsyscall  // 0x1003
-	_Gscanwaiting  = _Gscan + _Gwaiting  // 0x1004
+	_Gscan          = 0x1000
+	_Gscanrunnable  = _Gscan + _Grunnable  // 0x1001
+	_Gscanrunning   = _Gscan + _Grunning   // 0x1002
+	_Gscansyscall   = _Gscan + _Gsyscall   // 0x1003
+	_Gscanwaiting   = _Gscan + _Gwaiting   // 0x1004
+	_Gscanpreempted = _Gscan + _Gpreempted // 0x1009
 )
 
 const (
 	// P status
 	_Pidle    = iota
 	_Prunning // Only this P is allowed to change from _Prunning.
-	_Psyscall
+	_Psyscall_unused
 	_Pgcstop
 	_Pdead
 )
@@ -196,17 +205,14 @@ func (gp Guintptr) Ptr() *G { return (*G)(unsafe.Pointer(gp)) }
 //go:nosplit
 func (gp *Guintptr) Set(g *G) { *gp = Guintptr(unsafe.Pointer(g)) }
 
-//go:nosplit
 //func (gp *guintptr) Cas(old, new guintptr) bool {
 //	return atomic.Casuintptr((*uintptr)(unsafe.Pointer(gp)), uintptr(old), uintptr(new))
 //}
 
 type Puintptr uintptr
 
-//go:nosplit
 //func (pp Puintptr) ptr() *P { return (*P)(unsafe.Pointer(pp)) }
 
-//go:nosplit
 //func (pp *Puintptr) set(p *P) { *pp = Puintptr(unsafe.Pointer(p)) }
 
 // muintptr is a *m that is not tracked by the garbage collector.
@@ -216,8 +222,8 @@ type Puintptr uintptr
 //
 // 1. Never hold an muintptr locally across a safe point.
 //
-// 2. Any muintptr in the heap must be owned by the M itself so it can
-//    ensure it is not in use when the last true *m is released.
+//  2. Any muintptr in the heap must be owned by the M itself so it can
+//     ensure it is not in use when the last true *m is released.
 type Muintptr uintptr
 
 //go:nosplit
@@ -226,7 +232,7 @@ func (mp Muintptr) Ptr() *M { return (*M)(unsafe.Pointer(mp)) }
 //go:nosplit
 func (mp *Muintptr) Set(m *M) { *mp = Muintptr(unsafe.Pointer(m)) }
 
-type Uintreg uint64
+type Uintreg = sys.Uintreg
 
 type GoBuf struct {
 	// The offsets of sp, pc, and g are known to (hard-coded in) libmach.
@@ -245,9 +251,16 @@ type GoBuf struct {
 	pc   uintptr
 	g    Guintptr
 	ctxt unsafe.Pointer
-	ret  sys.Uintreg
 	lr   uintptr
-	bp   uintptr // for GOEXPERIMENT=framepointer
+	bp   uintptr // for framepointer-enabled architectures
+}
+
+// maybeTraceablePtr is a pointer that is traceable by the GC.
+// (Under the race detector or in other special builds it is
+// the source of truth for the pointer value.)
+type maybeTraceablePtr struct {
+	vp unsafe.Pointer // For liveness only.
+	vu uintptr        // Source of truth.
 }
 
 // Sudog represents a g in a wait list, such as for sending/receiving
@@ -261,58 +274,44 @@ type GoBuf struct {
 // Sudogs are allocated from a special pool. use acquiresudog and
 // releasesudog to allocate and free them.
 type Sudog struct {
-	// the following fields are protected by the hchan.lock of the
+	// The following fields are protected by the hchan.lock of the
 	// channel this sudog is blocking on. shrinkstack depends on
 	// this for sudogs involved in channel ops.
 
 	g *G
 
-	// isselect indicates g is participating in a select, so
-	// g.selectdone must be cas'd to win the wake-up race.
-	isselect bool
-	next     *Sudog
-	prev     *Sudog
-	elem     unsafe.Pointer // data element (may point to stack)
+	next *Sudog
+	prev *Sudog
 
-	// the following fields are never accessed concurrently.
-	// for channels, waitlink is only accessed by g.
-	// for semaphores, all fields (including the ones above)
-	// are only accessed when holding a semaroot lock.
+	elem maybeTraceablePtr // data element (may point to stack)
+
+	// The following fields are never accessed concurrently.
+	// For channels, waitlink is only accessed by g.
+	// For semaphores, all fields (including the ones above)
+	// are only accessed when holding a semaRoot lock.
 
 	acquiretime int64
 	releasetime int64
 	ticket      uint32
-	parent      *Sudog // semaroot binary tree
-	waitlink    *Sudog // g.waiting list or semaroot
-	waittail    *Sudog // semaroot
-	c           *HChan // channel
-}
 
-type GCStats struct {
-	// the struct must consist of only uint64's,
-	// because it is casted to uint64[].
-	nhandoff    uint64
-	nhandoffcnt uint64
-	nprocyield  uint64
-	nosyield    uint64
-	nsleep      uint64
-}
+	// isSelect indicates g is participating in a select, so
+	// g.selectDone must be CAS'd to win the wake-up race.
+	isSelect bool
 
-type LibCall struct {
-	fn   uintptr
-	n    uintptr // number of parameters
-	args uintptr // parameters
-	r1   uintptr // return values
-	r2   uintptr
-	err  uintptr // error number
-}
+	// success indicates whether communication over channel c
+	// succeeded. It is true if the goroutine was awoken because a
+	// value was delivered over channel c, and false if awoken
+	// because c was closed.
+	success bool
 
-// describes how to handle callback
-type WinCallBackContext struct {
-	gobody       unsafe.Pointer // go function to call
-	argsize      uintptr        // callback arguments size (in bytes)
-	restorestack uintptr        // adjust stack on return by (in bytes) (386 only)
-	cleanstack   bool
+	// waiters is a count of semaRoot waiting list other than head of list,
+	// clamped to a uint16 to fit in unused space.
+	waiters uint16
+
+	parent   *Sudog            // semaRoot binary tree
+	waitlink *Sudog            // g.waiting list or semaRoot
+	waittail *Sudog            // semaRoot
+	c        maybeTraceablePtr // channel
 }
 
 // Stack describes a Go execution stack.
@@ -323,223 +322,198 @@ type Stack struct {
 	hi uintptr
 }
 
-// stkbar records the state of a G's stack barrier.
-type StkBar struct {
-	savedLRPtr uintptr // location overwritten by stack barrier PC
-	savedLRVal uintptr // value overwritten at savedLRPtr
-}
-
-/*
- * deferred subroutine calls
- */
+// Defer is a deferred call record.
 type Defer struct {
-	siz     int32
-	started bool
-	sp      uintptr // sp at time of defer
-	pc      uintptr
-	fn      *FuncVal
-	_panic  *Panic // panic that is running defer
-	link    *Defer
+	heap      bool
+	rangefunc bool    // true for rangefunc list
+	sp        uintptr // sp at time of defer
+	pc        uintptr // pc at time of defer
+	fn        func()  // can be nil for open-coded defers
+	link      *Defer  // next defer on G; can point to either heap or stack!
+
+	head unsafe.Pointer // *atomic.Pointer[_defer]
 }
 
-/*
- * panics
- */
+// Panic is a panic record.
 type Panic struct {
-	argp      unsafe.Pointer // pointer to arguments of deferred call run during panic; cannot move - known to liblink
-	arg       interface{}    // argument to panic
-	link      *Panic         // link to earlier panic
-	recovered bool           // whether this panic is over
-	aborted   bool           // the panic was aborted
-}
+	arg  any    // argument to panic
+	link *Panic // link to earlier panic
 
-// Layout of in-memory per-function information prepared by linker
-// See https://golang.org/s/go12symtab.
-// Keep in sync with linker
-// and with package debug/gosym and with symtab.go in package runtime.
-type Func struct {
-	entry   uintptr // start pc
-	nameoff int32   // function name
+	startPC uintptr
+	startSP unsafe.Pointer
 
-	args int32 // in/out args size
-	_    int32 // previously legacy frame size; kept for layout compatibility
+	pc uintptr
+	sp unsafe.Pointer
+	fp unsafe.Pointer
 
-	pcsp      int32
-	pcfile    int32
-	pcln      int32
-	npcdata   int32
-	nfuncdata int32
-}
+	retpc uintptr
 
-/*
- * stack traces
- */
+	deferBitsPtr *uint8
+	slotsPtr     unsafe.Pointer
 
-type StkFrame struct {
-	fn       *Func      // function being run
-	pc       uintptr    // program counter within fn
-	continpc uintptr    // program counter where execution can continue, or 0 if not
-	lr       uintptr    // program counter at caller aka link register
-	sp       uintptr    // stack pointer at pc
-	fp       uintptr    // stack pointer at caller aka frame pointer
-	varp     uintptr    // top of local variables
-	argp     uintptr    // pointer to function arguments
-	arglen   uintptr    // number of bytes at argp
-	argmap   *BitVector // force use of this argmap
+	recovered   bool // whether this panic has been recovered
+	repanicked  bool // whether this panic repanicked
+	goexit      bool
+	deferreturn bool
 }
 
 // AncestorInfo records details of where a goroutine was started.
 type AncestorInfo struct {
 	PCS  []uintptr // pcs from the stack of this goroutine
-	GoID int64     // goroutine id of this goroutine; original goroutine possibly dead
+	GoID uint64    // goroutine id of this goroutine; original goroutine possibly dead
 	GoPC uintptr   // pc of go statement that created this goroutine
 }
 
-// Per-thread (in Go, per-P) cache for small objects.
-// No locking needed because it is per-thread (per-P).
+// G is the goroutine descriptor of go1.27.
 //
-// mcaches are allocated from non-GC'd memory, so any heap pointers
-// must be specially handled.
-type MCache struct {
-	// ...
-}
-
+// Only a prefix of the runtime struct is mirrored: the tail (xRegs,
+// trace, gcAssistBytes, valgrindStackID) is left out because xRegs depends
+// on the GOARCH/GOEXPERIMENT. Never allocate or copy a G, only use
+// pointers received from the runtime.
 type G struct {
-	// Stack parameters.
-	// stack describes the actual stack memory: [stack.lo, stack.hi).
-	// stackguard0 is the stack pointer compared in the Go stack growth prologue.
-	// It is stack.lo+StackGuard normally, but can be StackPreempt to trigger a preemption.
-	// stackguard1 is the stack pointer compared in the C stack growth prologue.
-	// It is stack.lo+StackGuard on g0 and gsignal stacks.
-	// It is ~0 on other goroutine stacks, to trigger a call to morestackc (and crash).
 	Stack       Stack   // offset known to runtime/cgo
-	StackGuard0 uintptr // offset known to liblink
-	StackGuard1 uintptr // offset known to liblink
+	StackGuard0 uintptr // offset known to cmd/internal/obj/*
+	StackGuard1 uintptr // offset known to cmd/internal/obj/*
 
-	Panic          *Panic // innermost panic - offset known to liblink
-	Defer          *Defer // innermost defer
-	M              *M     // current m; offset known to arm liblink
-	Sched          GoBuf
-	SysCallSP      uintptr        // if status==Gsyscall, syscallsp = sched.sp to use during gc
-	SysCallPC      uintptr        // if status==Gsyscall, syscallpc = sched.pc to use during gc
-	StkTopSP       uintptr        // expected sp at top of stack, to check in traceback
-	Param          unsafe.Pointer // passed parameter on wakeup
-	AtomicStatus   uint32
-	StackLock      uint32 // sigprof/scang lock; TODO: fold in to atomicstatus
-	GoID           int64
-	SchedLink      Guintptr
-	WaitSince      int64      // approx time when the g become blocked
-	WaitReason     WaitReason // if status==Gwaiting
-	Preempt        bool       // preemption signal, duplicates stackguard0 = stackpreempt
-	PanicOnFault   bool       // panic (instead of crash) on unexpected fault address
-	PreemptScan    bool       // preempted g does scan for gc
-	GcScanDone     bool       // g has scanned stack; protected by _Gscan bit in status
-	GcScanValid    bool       // false at start of gc cycle, true if G has not run since last scan; TODO: remove?
-	ThrowSplit     bool       // must not split stack
-	RaceIgnore     int8       // ignore race detection events
-	SysBlockTraced bool       // StartTrace has emitted EvGoInSyscall about this goroutine
-	SysExitTicks   int64      // cputicks when syscall has returned (for tracing)
-	TraceSeq       uint64     // trace event sequencer
-	TraceLastP     Puintptr   // last P emitted an event for this goroutine
-	LockedM        Muintptr
-	Sig            uint32
-	WriteBuf       []byte
-	SigCode0       uintptr
-	SigCode1       uintptr
-	SigPC          uintptr
-	GoPC           uintptr         // pc of go statement that created this goroutine
-	Ancestors      *[]AncestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
-	StartPC        uintptr         // pc of goroutine function
-	RaceCtx        uintptr
-	Waiting        *Sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
-	CgoCtxt        []uintptr      // cgo traceback context
-	Labels         unsafe.Pointer // profiler labels
-	Timer          *Timer         // cached timer for time.Sleep
-	SelectDone     uint32         // are we participating in a select and did someone win the race?
+	Panic     *Panic // innermost panic
+	Defer     *Defer // innermost defer
+	M         *M     // current m; offset known to arm liblink
+	Sched     GoBuf
+	SysCallSP uintptr // if status==Gsyscall, syscallsp = sched.sp to use during gc
+	SysCallPC uintptr // if status==Gsyscall, syscallpc = sched.pc to use during gc
+	SysCallBP uintptr // if status==Gsyscall, syscallbp = sched.bp to use in fpTraceback
+	StkTopSP  uintptr // expected sp at top of stack, to check in traceback
 
-	// Per-G GC state
+	Param        unsafe.Pointer // passed parameter on wakeup
+	AtomicStatus uint32
+	StackLock    uint32 // sigprof/scang lock; TODO: fold in to atomicstatus
+	GoID         uint64
+	SchedLink    Guintptr
+	WaitSince    int64      // approx time when the g become blocked
+	WaitReason   WaitReason // if status==Gwaiting
 
-	// gcAssistBytes is this G's GC assist credit in terms of
-	// bytes allocated. If this is positive, then the G has credit
-	// to allocate gcAssistBytes bytes without assisting. If this
-	// is negative, then the G must correct this by performing
-	// scan work. We track this in bytes to make it fast to update
-	// and check for debt in the malloc hot path. The assist ratio
-	// determines how this corresponds to scan work debt.
-	GcAssistBytes int64
+	Preempt       bool // preemption signal, duplicates stackguard0 = stackpreempt
+	PreemptStop   bool // transition to _Gpreempted on preemption; otherwise, just deschedule
+	PreemptShrink bool // shrink stack at synchronous safe point
+
+	// AsyncSafePoint is set if g is stopped at an asynchronous
+	// safe point. This means there are frames on the stack
+	// without precise pointer information.
+	AsyncSafePoint bool
+
+	PanicOnFault     bool // panic (instead of crash) on unexpected fault address
+	GcScanDone       bool // g has scanned stack; protected by _Gscan bit in status
+	ThrowSplit       bool // must not split stack
+	ActiveStackChans bool
+	ParkingOnChan    uint8
+	InMarkAssist     bool
+	CoroExit         bool // argument to coroswitch_m
+
+	RaceIgnore      int8  // ignore race detection events
+	NoCgoCallback   bool  // whether disable callback from C
+	Tracking        bool  // whether we're tracking this G for sched latency statistics
+	TrackingSeq     uint8 // used to decide whether to track this G
+	TrackingStamp   int64 // timestamp of when the G last started being tracked
+	RunnableTime    int64 // the amount of time spent runnable, cleared when running, only used when tracking
+	LockedM         Muintptr
+	FipsIndicator   uint8
+	FipsOnlyBypass  bool
+	DitWanted       bool // set if g wants to be executed with DIT enabled
+	SyncSafePoint   bool // set if g is stopped at a synchronous safe point.
+	RunningCleanups uint8
+	Sig             uint32
+	Secret          int32 // current nesting of runtime/secret.Do calls.
+	WriteBuf        []byte
+	SigCode0        uintptr
+	SigCode1        uintptr
+	SigPC           uintptr
+	ParentGoID      uint64          // goid of goroutine that created this goroutine
+	GoPC            uintptr         // pc of go statement that created this goroutine
+	Ancestors       *[]AncestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
+	StartPC         uintptr         // pc of goroutine function
+	RaceCtx         uintptr
+	Waiting         *Sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
+	CgoCtxt         []uintptr      // cgo traceback context
+	Labels          unsafe.Pointer // profiler labels
+	Timer           *Timer         // cached timer for time.Sleep
+	SleepWhen       int64          // when to sleep until
+	SelectDone      uint32         // are we participating in a select and did someone win the race?
+
+	GoroutineProfiled uint32         // goroutineProfileStateHolder
+	CoroArg           unsafe.Pointer // *coro, argument during coroutine transfers
+	Bubble            unsafe.Pointer // *synctestBubble
 }
 
+// ListNodeManual is a node in a manually managed list.
+type ListNodeManual struct {
+	prev uintptr
+	next uintptr
+}
+
+// M is the OS thread descriptor of go1.27.
+//
+// Only a prefix of the runtime struct is mirrored, up to LockedInt: the
+// rest (mWaitList, mLockProfile, ..., mOS, ...) is large and OS specific.
+// Never allocate or copy an M, only use pointers received from the runtime.
+// SigMask is exact on darwin and linux only (see sigset_*.go).
 type M struct {
 	G0      *G     // goroutine with scheduling stack
 	MoreBuf GoBuf  // gobuf arg to morestack
-	DivMod  uint32 // div/mod denominator for arm - known to liblink
+	DivMod  uint32 // div/mod denominator for arm - known to liblink (cmd/internal/obj/arm/obj5.go)
 
-	// Fields not known to debuggers.
-	ProcID        uint64       // for debuggers, but offset not hard-coded
-	GSignal       *G           // signal-handling g
-	GoSigStack    GSignalStack // Go-allocated signal handling stack
-	SigMask       SigSet       // storage for saved signal mask
-	TLS           [6]uintptr   // thread-local storage (for x86 extern register)
-	MStartFn      func()
-	CurG          *G       // current running goroutine
-	CaughtSig     Guintptr // goroutine running during fatal signal
-	P             Puintptr // attached p for executing go code (nil if not executing go code)
-	NextP         Puintptr
-	OldP          Puintptr // the p that was attached before executing a syscall
-	ID            int64
-	MAllocing     int32
-	Throwing      int32
-	PreemptOff    string // if != "", keep curg running on this m
-	Locks         int32
-	Dying         int32
-	ProfileHz     int32
-	Spinning      bool // m is out of work and is actively looking for work
-	Blocked       bool // m is blocked on a note
-	InWb          bool // m is executing a write barrier
-	NewSigStack   bool // minit on C thread called sigaltstack
-	PrintLock     int8
-	IncGo         bool   // m is executing a cgo call
-	FreeWait      uint32 // if == 0, safe to free g0 and delete m (atomic)
-	FastRand      [2]uint32
-	NeedextRam    bool
-	TraceBack     uint8
-	NCgoCall      uint64      // number of cgo calls in total
-	NCgo          int32       // number of cgo calls currently in progress
-	CgoCallersUse uint32      // if non-zero, cgoCallers in use temporarily
-	CgoCallers    *CgoCallers // cgo traceback if crashing in cgo call
-	Park          Note
-	AllLink       *M // on allm
-	SchedLink     Muintptr
-	MCache        *MCache
-	LockedG       Guintptr
-	CreateStack   [32]uintptr    // stack that created this thread.
-	LockedExt     uint32         // tracking for external LockOSThread
-	LockedInt     uint32         // tracking for internal lockOSThread
-	NextWaitM     Muintptr       // next m waiting for lock
-	WaitUnlockF   unsafe.Pointer // todo go func(*g, unsafe.pointer) bool
-	WaitLock      unsafe.Pointer
-	WaitTraceEv   byte
-	WaitTraceSkip int
-	StartingTrace bool
-	SysCallTick   uint32
-	Thread        uintptr // thread handle
-	FreeLink      *M      // on sched.freem
+	// Fields whose offsets are not known to debuggers.
 
-	// these are here because they are too large to be on the stack
-	// of low-level NOSPLIT functions.
-	LibCall   LibCall
-	LibCallPC uintptr // for cpu profiler
-	LibCallSP uintptr
-	LibCallG  Guintptr
-	Syscall   LibCall // stores syscall parameters on windows
+	ProcID     uint64       // for debuggers, but offset not hard-coded
+	GSignal    *G           // signal-handling g
+	GoSigStack GSignalStack // Go-allocated signal handling stack
+	SigMask    SigSet       // storage for saved signal mask
+	TLS        [6]uintptr   // thread-local storage (for x86 extern register)
+	MStartFn   func()
+	CurG       *G       // current running goroutine
+	CaughtSig  Guintptr // goroutine running during fatal signal
 
-	VDSOSP uintptr // SP for traceback while in VDSO call (0 if not in call)
-	VDSOPC uintptr // PC for traceback while in VDSO call
+	// Indicates whether we've received a signal while running in secret mode.
+	SignalSecret bool
 
-	MOS
+	// P is the currently attached P for executing Go code, nil if not executing user Go code.
+	P               Puintptr
+	NextP           Puintptr // The next P to install before executing. Implies exclusive ownership of this P.
+	OldP            Puintptr // The P that was attached before executing a syscall.
+	ID              int64
+	MAllocing       int32
+	Throwing        uint32 // throwType
+	PreemptOff      string // if != "", keep curg running on this m
+	Locks           int32
+	Dying           int32
+	ProfileHz       int32
+	Spinning        bool // m is out of work and is actively looking for work
+	Blocked         bool // m is blocked on a note
+	NewSigStack     bool // minit on C thread called sigaltstack
+	PrintLock       int8
+	IncGo           bool   // m is executing a cgo call
+	IsExtra         bool   // m is an extra m
+	IsExtraInC      bool   // m is an extra m that does not have any Go frames
+	IsExtraInSig    bool   // m is an extra m in a signal handler
+	FreeWait        uint32 // Whether it is safe to free g0 and delete m (one of freeMRef, freeMStack, freeMWait)
+	NeedExtraM      bool
+	G0StackAccurate bool // whether the g0 stack has accurate bounds
+	TraceBack       uint8
+	AllpSnapshot    []unsafe.Pointer // []*p, snapshot of allp for use after dropping P in findRunnable, nil otherwise.
+	NCgoCall        uint64           // number of cgo calls in total
+	NCgo            int32            // number of cgo calls currently in progress
+	CgoCallersUse   uint32           // if non-zero, cgoCallers in use temporarily
+	CgoCallers      *CgoCallers      // cgo traceback if crashing in cgo call
+	Park            Note
+	AllLink         *M // on allm
+	SchedLink       Muintptr
+	IdleNode        ListNodeManual
+	LockedG         Guintptr
+	CreateStack     [32]uintptr // stack that created this thread, it's used for StackRecord.Stack0, so it must align with it.
+	LockedExt       uint32      // tracking for external LockOSThread
+	LockedInt       uint32      // tracking for internal lockOSThread
 }
 
-// A waitReason explains why a goroutine has been stopped.
+// A WaitReason explains why a goroutine has been stopped.
 // See gopark. Do not re-use waitReasons, add new ones.
 type WaitReason uint8
 
@@ -547,27 +521,50 @@ const (
 	WaitReasonZero                  WaitReason = iota // ""
 	WaitReasonGCAssistMarking                         // "GC assist marking"
 	WaitReasonIOWait                                  // "IO wait"
-	WaitReasonChanReceiveNilChan                      // "chan receive (nil chan)"
-	WaitReasonChanSendNilChan                         // "chan send (nil chan)"
 	WaitReasonDumpingHeap                             // "dumping heap"
 	WaitReasonGarbageCollection                       // "garbage collection"
 	WaitReasonGarbageCollectionScan                   // "garbage collection scan"
 	WaitReasonPanicWait                               // "panicwait"
-	WaitReasonSelect                                  // "select"
-	WaitReasonSelectNoCases                           // "select (no cases)"
 	WaitReasonGCAssistWait                            // "GC assist wait"
 	WaitReasonGCSweepWait                             // "GC sweep wait"
-	WaitReasonChanReceive                             // "chan receive"
-	WaitReasonChanSend                                // "chan send"
+	WaitReasonGCScavengeWait                          // "GC scavenge wait"
 	WaitReasonFinalizerWait                           // "finalizer wait"
-	WaitReasonForceGGIdle                             // "force gc (idle)"
+	WaitReasonForceGCIdle                             // "force gc (idle)"
+	WaitReasonUpdateGOMAXPROCSIdle                    // "GOMAXPROCS updater (idle)"
 	WaitReasonSemacquire                              // "semacquire"
 	WaitReasonSleep                                   // "sleep"
+	WaitReasonChanReceiveNilChan                      // "chan receive (nil chan)"
+	WaitReasonChanSendNilChan                         // "chan send (nil chan)"
+	WaitReasonSelectNoCases                           // "select (no cases)"
+	WaitReasonSelect                                  // "select"
+	WaitReasonChanReceive                             // "chan receive"
+	WaitReasonChanSend                                // "chan send"
 	WaitReasonSyncCondWait                            // "sync.Cond.Wait"
-	WaitReasonTimerGoroutineIdle                      // "timer goroutine (idle)"
+	WaitReasonSyncMutexLock                           // "sync.Mutex.Lock"
+	WaitReasonSyncRWMutexRLock                        // "sync.RWMutex.RLock"
+	WaitReasonSyncRWMutexLock                         // "sync.RWMutex.Lock"
+	WaitReasonSyncWaitGroupWait                       // "sync.WaitGroup.Wait"
 	WaitReasonTraceReaderBlocked                      // "trace reader (blocked)"
 	WaitReasonWaitForGCCycle                          // "wait for GC cycle"
 	WaitReasonGCWorkerIdle                            // "GC worker (idle)"
+	WaitReasonGCWorkerActive                          // "GC worker (active)"
+	WaitReasonPreempted                               // "preempted"
+	WaitReasonDebugCall                               // "debug call"
+	WaitReasonGCMarkTermination                       // "GC mark termination"
+	WaitReasonStoppingTheWorld                        // "stopping the world"
+	WaitReasonFlushProcCaches                         // "flushing proc caches"
+	WaitReasonTraceGoroutineStatus                    // "trace goroutine status"
+	WaitReasonTraceProcStatus                         // "trace proc status"
+	WaitReasonPageTraceFlush                          // "page trace flush"
+	WaitReasonCoroutine                               // "coroutine"
+	WaitReasonGCWeakToStrongWait                      // "GC weak to strong wait"
+	WaitReasonSynctestRun                             // "synctest.Run"
+	WaitReasonSynctestWait                            // "synctest.Wait"
+	WaitReasonSynctestChanReceive                     // "chan receive (durable)"
+	WaitReasonSynctestChanSend                        // "chan send (durable)"
+	WaitReasonSynctestSelect                          // "select (durable)"
+	WaitReasonSynctestWaitGroupWait                   // "sync.WaitGroup.Wait (durable)"
+	WaitReasonCleanupWait                             // "cleanup wait"
 )
 
 var WaitReasonStrings = [...]string{
@@ -584,21 +581,44 @@ var WaitReasonStrings = [...]string{
 	WaitReasonSelectNoCases:         "select (no cases)",
 	WaitReasonGCAssistWait:          "GC assist wait",
 	WaitReasonGCSweepWait:           "GC sweep wait",
+	WaitReasonGCScavengeWait:        "GC scavenge wait",
 	WaitReasonChanReceive:           "chan receive",
 	WaitReasonChanSend:              "chan send",
 	WaitReasonFinalizerWait:         "finalizer wait",
-	WaitReasonForceGGIdle:           "force gc (idle)",
+	WaitReasonForceGCIdle:           "force gc (idle)",
+	WaitReasonUpdateGOMAXPROCSIdle:  "GOMAXPROCS updater (idle)",
 	WaitReasonSemacquire:            "semacquire",
 	WaitReasonSleep:                 "sleep",
 	WaitReasonSyncCondWait:          "sync.Cond.Wait",
-	WaitReasonTimerGoroutineIdle:    "timer goroutine (idle)",
+	WaitReasonSyncMutexLock:         "sync.Mutex.Lock",
+	WaitReasonSyncRWMutexRLock:      "sync.RWMutex.RLock",
+	WaitReasonSyncRWMutexLock:       "sync.RWMutex.Lock",
+	WaitReasonSyncWaitGroupWait:     "sync.WaitGroup.Wait",
 	WaitReasonTraceReaderBlocked:    "trace reader (blocked)",
 	WaitReasonWaitForGCCycle:        "wait for GC cycle",
 	WaitReasonGCWorkerIdle:          "GC worker (idle)",
+	WaitReasonGCWorkerActive:        "GC worker (active)",
+	WaitReasonPreempted:             "preempted",
+	WaitReasonDebugCall:             "debug call",
+	WaitReasonGCMarkTermination:     "GC mark termination",
+	WaitReasonStoppingTheWorld:      "stopping the world",
+	WaitReasonFlushProcCaches:       "flushing proc caches",
+	WaitReasonTraceGoroutineStatus:  "trace goroutine status",
+	WaitReasonTraceProcStatus:       "trace proc status",
+	WaitReasonPageTraceFlush:        "page trace flush",
+	WaitReasonCoroutine:             "coroutine",
+	WaitReasonGCWeakToStrongWait:    "GC weak to strong wait",
+	WaitReasonSynctestRun:           "synctest.Run",
+	WaitReasonSynctestWait:          "synctest.Wait",
+	WaitReasonSynctestChanReceive:   "chan receive (durable)",
+	WaitReasonSynctestChanSend:      "chan send (durable)",
+	WaitReasonSynctestSelect:        "select (durable)",
+	WaitReasonSynctestWaitGroupWait: "sync.WaitGroup.Wait (durable)",
+	WaitReasonCleanupWait:           "cleanup wait",
 }
 
 func (w WaitReason) String() string {
-	if w < 0 || w >= WaitReason(len(WaitReasonStrings)) {
+	if w >= WaitReason(len(WaitReasonStrings)) {
 		return "unknown wait reason"
 	}
 	return WaitReasonStrings[w]

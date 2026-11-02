@@ -26,13 +26,13 @@ func (p *Park) Ptr() unsafe.Pointer {
 
 // GoPark puts the current goroutine into a waiting state and calls unlockf.
 func (p *Park) Park(m *g.Mutex) {
-	GoPark(func(g *g.G, p unsafe.Pointer) bool { return true }, unsafe.Pointer(m), g.WaitReasonZero, trace.TraceEvNone, 1)
+	GoPark(func(g *g.G, p unsafe.Pointer) bool { return true }, unsafe.Pointer(m), g.WaitReasonZero, trace.BlockGeneric, 1)
 }
 
 // GoParkUnlock puts the current goroutine into a waiting state and unlocks the lock.
 // The goroutine can be made runnable again by calling goready(gp).
 func (p *Park) ParkUnlock(m *g.Mutex) {
-	GoParkUnlock(m, g.WaitReasonZero, trace.TraceEvNone, 1)
+	GoParkUnlock(m, g.WaitReasonZero, trace.BlockGeneric, 1)
 }
 
 // GoReady marks gp is ready to run.
@@ -50,22 +50,21 @@ func (p *Park) Ready() {
 // Do not re-use reasons, add new ones.
 // Lock is g.Mutex spin mutex.
 //go:linkname GoPark runtime.gopark
-func GoPark(unlockf func(*g.G, unsafe.Pointer) bool, lock unsafe.Pointer, reason g.WaitReason, traceEv byte, traceskip int)
+func GoPark(unlockf func(*g.G, unsafe.Pointer) bool, lock unsafe.Pointer, reason g.WaitReason, traceReason trace.BlockReason, traceskip int)
 
-// ParkUnlock_c puts the current goroutine into a waiting state and unlocks the lock.
-// The goroutine can be made runnable again by calling goready(gp).
-
-//go:linkname ParkUnlock_c runtime.parkunlock_c
-func ParkUnlock_c(gp *g.G, lock unsafe.Pointer) bool
+// ParkUnlock_c unlocks the lock and returns true; it is an unlockf for GoPark.
+// runtime.parkunlock_c is not linkname-able since go1.23, so it is reimplemented.
+func ParkUnlock_c(gp *g.G, lock unsafe.Pointer) bool {
+	Unlock((*g.Mutex)(lock))
+	return true
+}
 
 // GoParkUnlock puts the current goroutine into a waiting state and unlocks the lock.
 // The goroutine can be made runnable again by calling goready(gp).
-//
-// Implementation:
-// - gopark(parkunlock_c, unsafe.Pointer(lock), reason, traceEv, traceskip)
-//
-//go:linkname GoParkUnlock runtime.goparkunlock
-func GoParkUnlock(lock *g.Mutex, reason g.WaitReason, traceEv byte, traceskip int)
+// runtime.goparkunlock is not linkname-able since go1.23, so it is reimplemented.
+func GoParkUnlock(lock *g.Mutex, reason g.WaitReason, traceReason trace.BlockReason, traceskip int) {
+	GoPark(ParkUnlock_c, unsafe.Pointer(lock), reason, traceReason, traceskip)
+}
 
 // GoReady marks gp is ready to run.
 // Implementation:

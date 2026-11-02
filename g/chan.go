@@ -33,11 +33,13 @@ type HChan struct {
 	buf      unsafe.Pointer // points to an array of dataqsiz elements
 	elemsize uint16
 	closed   uint32
-	elemtype *Type // element type
-	sendx    uint  // send index
-	recvx    uint  // receive index
-	recvq    WaitQ // list of recv waiters
-	sendq    WaitQ // list of send waiters
+	timer    *Timer         // timer feeding this chan
+	elemtype *Type          // element type
+	sendx    uint           // send index
+	recvx    uint           // receive index
+	recvq    WaitQ          // list of recv waiters
+	sendq    WaitQ          // list of send waiters
+	bubble   unsafe.Pointer // *synctestBubble
 
 	// lock protects all fields in hchan, as well as several
 	// fields in sudogs blocked on this channel.
@@ -52,4 +54,3 @@ type WaitQ struct {
 	first *Sudog
 	last  *Sudog
 }
-

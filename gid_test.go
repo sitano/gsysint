@@ -12,7 +12,7 @@ func TestGIDFromStack(t *testing.T) {
 		t.Fatal(err)
 	}
 	id2 := g.CurG().GoID
-	if id != id {
+	if id != id2 {
 		t.Error("ids are different", id, id2)
 	}
 }
