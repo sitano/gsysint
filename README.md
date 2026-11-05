@@ -1,5 +1,8 @@
 # gsysint
 
+[![ci](https://github.com/sitano/gsysint/actions/workflows/ci.yml/badge.svg)](https://github.com/sitano/gsysint/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/sitano/gsysint.svg)](https://pkg.go.dev/github.com/sitano/gsysint)
+
 Golang (as of 1.27.2, amd64/386/arm64) runtime internals that gives you an access to internal scheduling primitives.
 (for learning purposes)
 

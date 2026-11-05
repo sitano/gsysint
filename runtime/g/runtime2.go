@@ -202,7 +202,7 @@ type FuncVal struct {
 type Guintptr uintptr
 
 //go:nosplit
-func (gp Guintptr) Ptr() *G { return (*G)(unsafe.Pointer(gp)) }
+func (gp Guintptr) Ptr() *G { return *(**G)(unsafe.Pointer(&gp)) }
 
 //go:nosplit
 func (gp *Guintptr) Set(g *G) { *gp = Guintptr(unsafe.Pointer(g)) }
@@ -229,7 +229,7 @@ type Puintptr uintptr
 type Muintptr uintptr
 
 //go:nosplit
-func (mp Muintptr) Ptr() *M { return (*M)(unsafe.Pointer(mp)) }
+func (mp Muintptr) Ptr() *M { return *(**M)(unsafe.Pointer(&mp)) }
 
 //go:nosplit
 func (mp *Muintptr) Set(m *M) { *mp = Muintptr(unsafe.Pointer(m)) }
