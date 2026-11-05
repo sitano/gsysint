@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/sitano/gsysint/internal/race"
 	"github.com/sitano/gsysint/mutex"
 	"github.com/sitano/gsysint/runtime/g"
 	"github.com/sitano/gsysint/runtime/trace"
@@ -43,7 +44,15 @@ func (p *Park) ParkUnlock(m *mutex.Mutex) {
 	GoParkUnlock(m, g.WaitReasonZero, trace.BlockGeneric, 1)
 }
 
+// IsParked reports whether the goroutine recorded by Set is parked (see IsParked).
+func (p *Park) IsParked() bool {
+	gp := (*g.G)(p.Ptr())
+	return gp != nil && IsParked(gp)
+}
+
 // Ready marks the parked goroutine ready to run.
+// It throws "bad g->status in ready" if the goroutine is not parked yet:
+// use IsParked, a handshake, or event.Event, which has no such ordering hazard.
 func (p *Park) Ready() {
 	GoReady((*g.G)(p.Ptr()), 1)
 }
@@ -77,6 +86,8 @@ func ParkUnlock_c(gp *g.G, lock unsafe.Pointer) bool {
 // The goroutine can be made runnable again by calling goready(gp).
 // runtime.goparkunlock is not linkname-able since go1.23, so it is reimplemented.
 func GoParkUnlock(lock *mutex.Mutex, reason g.WaitReason, traceReason trace.BlockReason, traceskip int) {
+	// ParkUnlock_c releases lock on g0, invisible to -race: publish the release here.
+	race.Release(unsafe.Pointer(lock))
 	GoPark(ParkUnlock_c, unsafe.Pointer(lock), reason, traceReason, traceskip)
 }
 

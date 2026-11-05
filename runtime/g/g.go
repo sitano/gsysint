@@ -13,7 +13,10 @@
 //     blocked or in a syscall w/o an associated P.
 package g
 
-import "unsafe"
+import (
+	"sync/atomic"
+	"unsafe"
+)
 
 // GetGPtr returns the pointer to the current g.
 // The compiler rewrites calls to this function into instructions
@@ -33,4 +36,23 @@ func CurG() *G {
 // CurM returns the pointer to the current m.
 func CurM() *M {
 	return (*M)(GetM())
+}
+
+// Goroutine scheduling states (runtime._G*), see runtime2.go.
+const (
+	Gidle      = _Gidle
+	Grunnable  = _Grunnable
+	Grunning   = _Grunning
+	Gsyscall   = _Gsyscall
+	Gwaiting   = _Gwaiting
+	Gdead      = _Gdead
+	Gcopystack = _Gcopystack
+	Gpreempted = _Gpreempted
+	Gscan      = _Gscan
+)
+
+// Status returns gp's scheduling state with the Gscan bit cleared
+// (the GC sets Gscan while it scans a stack; the underlying state is unchanged).
+func (gp *G) Status() uint32 {
+	return atomic.LoadUint32(&gp.AtomicStatus) &^ _Gscan
 }
