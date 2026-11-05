@@ -4,8 +4,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/sitano/gsysint/trace"
 	"github.com/sitano/gsysint/g"
+	"github.com/sitano/gsysint/trace"
 )
 
 type Park struct {
@@ -24,7 +24,7 @@ func (p *Park) Ptr() unsafe.Pointer {
 	return atomic.LoadPointer(&p.g)
 }
 
-// GoPark puts the current goroutine into a waiting state and calls unlockf.
+// Park puts the current goroutine into a waiting state while holding the lock.
 func (p *Park) Park(m *g.Mutex) {
 	GoPark(func(g *g.G, p unsafe.Pointer) bool { return true }, unsafe.Pointer(m), g.WaitReasonZero, trace.BlockGeneric, 1)
 }
@@ -37,7 +37,7 @@ func (p *Park) ParkUnlock(m *g.Mutex) {
 
 // GoReady marks gp is ready to run.
 func (p *Park) Ready() {
-	GoReady((*g.G)(p.g), 1)
+	GoReady((*g.G)(p.Ptr()), 1)
 }
 
 // GoPark puts the current goroutine into a waiting state and calls unlockf.
@@ -49,6 +49,7 @@ func (p *Park) Ready() {
 // Reasons should be unique and descriptive.
 // Do not re-use reasons, add new ones.
 // Lock is g.Mutex spin mutex.
+//
 //go:linkname GoPark runtime.gopark
 func GoPark(unlockf func(*g.G, unsafe.Pointer) bool, lock unsafe.Pointer, reason g.WaitReason, traceReason trace.BlockReason, traceskip int)
 
@@ -68,8 +69,10 @@ func GoParkUnlock(lock *g.Mutex, reason g.WaitReason, traceReason trace.BlockRea
 
 // GoReady marks gp is ready to run.
 // Implementation:
-// systemstack(func() {
-//   ready(gp, traceskip, true)
-// })
+//
+//	systemstack(func() {
+//	  ready(gp, traceskip, true)
+//	})
+//
 //go:linkname GoReady runtime.goready
 func GoReady(gp *g.G, traceskip int)

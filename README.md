@@ -24,50 +24,36 @@ Get goroutine id:
 Park goroutine the simple way:
 
     var p Park
-    p.Set()
-    p.Park(nil)
     
-Park goroutine detailed (simple):
-
-    w.Add(1)
     go func() {
         p.Set()
         p.Park(nil)
-        w.Done()
     }()
-    runtime.Gosched()
+    
     // unpark goroutine and mark as ready
     p.Ready()
-    w.Wait()
     
 Park goroutine harder with mutex release on park:
 
     var gp unsafe.Pointer
-    
+
     w := sync.WaitGroup{}
     w.Add(1)
-    
+
     l := &g.Mutex{}
     go func() {
         atomic.StorePointer(&gp, g.GetG())
         Lock(l)
-        // park
-        GoParkUnlock(l, g.WaitReasonZero, trace.TraceEvNone, 1) // actual park
         w.Done()
+        // park, l is released only after the goroutine is parked
+        GoParkUnlock(l, g.WaitReasonZero, trace.BlockGeneric, 1)
     }()
 
-    runtime.Gosched()
-
-    if gp == nil {
-        t.Fatalf("GetG() returned nil pointer to the g structure")
-    }
-
-    Lock(l)
+    w.Wait()  // goroutine has started and holds l
+    Lock(l)   // succeeds only once the goroutine is parked
     // unpark goroutine and mark as ready
-    GoReady((*g.G)(gp), 1)
+    GoReady((*g.G)(atomic.LoadPointer(&gp)), 1)
     Unlock(l)
-
-    w.Wait()
 
 Scheduling details
 ==================
@@ -138,7 +124,3 @@ TODO
 - `go test -race` crashes with `SIGSEGV addr=0x10` (on the g0/m0 stack) in
   `TestPark/raw api park with unlock`, inside the `GoParkUnlock` path. Not investigated;
   probably runtime internals not matching the race build.
-- Non-race flake: whole package once failed with a SIGSEGV on `go test -count=3 .`
-  (`-run TestPark -count=3` passed). The failing test is not identified.
-- `TestPark` relies on a single `runtime.Gosched()` to let the goroutine publish `gp`
-  before the nil check. Replace with a channel / `WaitGroup` handshake.
