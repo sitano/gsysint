@@ -7,7 +7,7 @@ package g
 import (
 	"unsafe"
 
-	"github.com/sitano/gsysint/sys"
+	"github.com/sitano/gsysint/runtime/sys"
 )
 
 // defined constants
@@ -117,6 +117,8 @@ const (
 // but on the contention path they sleep in the kernel.
 // A zeroed Mutex is unlocked (no need to initialize each lock).
 type Mutex struct {
+	// Empty struct if lock ranking is disabled, otherwise includes the lock rank
+	lockRankStruct
 	// Futex-based impl treats it as uint32 key,
 	// while sema-based impl as M* waitm.
 	// Used to be a union, but unions break precise GC.

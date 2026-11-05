@@ -1,11 +1,13 @@
-package gsysint
+// Package park parks and readies goroutines via the runtime scheduler (gopark/goready).
+package park
 
 import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/sitano/gsysint/g"
-	"github.com/sitano/gsysint/trace"
+	"github.com/sitano/gsysint/mutex"
+	"github.com/sitano/gsysint/runtime/g"
+	"github.com/sitano/gsysint/runtime/trace"
 )
 
 type Park struct {
@@ -25,23 +27,23 @@ func (p *Park) Ptr() unsafe.Pointer {
 }
 
 // Park puts the current goroutine into a waiting state while holding the lock.
-func (p *Park) Park(m *g.Mutex) {
-	GoPark(keepLock, unsafe.Pointer(m), g.WaitReasonZero, trace.BlockGeneric, 1)
+func (p *Park) Park(m *mutex.Mutex) {
+	GoPark(KeepLock, unsafe.Pointer(m), g.WaitReasonZero, trace.BlockGeneric, 1)
 }
 
-// keepLock is an unlockf that parks without releasing the lock (runs on g0, see ParkUnlock_c).
+// KeepLock is an unlockf that parks without releasing the lock (runs on g0, see ParkUnlock_c).
 //
 //go:norace
 //go:nosplit
-func keepLock(*g.G, unsafe.Pointer) bool { return true }
+func KeepLock(*g.G, unsafe.Pointer) bool { return true }
 
-// GoParkUnlock puts the current goroutine into a waiting state and unlocks the lock.
-// The goroutine can be made runnable again by calling goready(gp).
-func (p *Park) ParkUnlock(m *g.Mutex) {
+// ParkUnlock puts the current goroutine into a waiting state and unlocks the lock.
+// The goroutine can be made runnable again by calling Ready.
+func (p *Park) ParkUnlock(m *mutex.Mutex) {
 	GoParkUnlock(m, g.WaitReasonZero, trace.BlockGeneric, 1)
 }
 
-// GoReady marks gp is ready to run.
+// Ready marks the parked goroutine ready to run.
 func (p *Park) Ready() {
 	GoReady((*g.G)(p.Ptr()), 1)
 }
@@ -54,14 +56,15 @@ func (p *Park) Ready() {
 // It is displayed in stack traces and heap dumps.
 // Reasons should be unique and descriptive.
 // Do not re-use reasons, add new ones.
-// Lock is g.Mutex spin mutex.
+// Lock is a *mutex.Mutex for ParkUnlock_c.
 //
 //go:linkname GoPark runtime.gopark
 func GoPark(unlockf func(*g.G, unsafe.Pointer) bool, lock unsafe.Pointer, reason g.WaitReason, traceReason trace.BlockReason, traceskip int)
 
-// ParkUnlock_c unlocks the lock and returns true; it is an unlockf for GoPark.
+// ParkUnlock_c unlocks the lock (a *mutex.Mutex) and returns true; it is an unlockf for GoPark.
 // runtime.parkunlock_c is not linkname-able since go1.23, so it is reimplemented.
 // It runs on g0, which has no race context: norace keeps -race from instrumenting it.
+// It calls g.Unlock directly, not (*mutex.Mutex).Unlock, which -race would instrument.
 //
 //go:norace
 //go:nosplit
@@ -73,7 +76,7 @@ func ParkUnlock_c(gp *g.G, lock unsafe.Pointer) bool {
 // GoParkUnlock puts the current goroutine into a waiting state and unlocks the lock.
 // The goroutine can be made runnable again by calling goready(gp).
 // runtime.goparkunlock is not linkname-able since go1.23, so it is reimplemented.
-func GoParkUnlock(lock *g.Mutex, reason g.WaitReason, traceReason trace.BlockReason, traceskip int) {
+func GoParkUnlock(lock *mutex.Mutex, reason g.WaitReason, traceReason trace.BlockReason, traceskip int) {
 	GoPark(ParkUnlock_c, unsafe.Pointer(lock), reason, traceReason, traceskip)
 }
 

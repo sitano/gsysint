@@ -5,6 +5,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/sitano/gsysint/runtime/g"
 )
 
 var ErrWrongFormat = errors.New("wrong stack format")
@@ -26,3 +28,6 @@ func GIDFromStackTrace() (uint64, error) {
 	}
 	return id, nil
 }
+
+// GoID returns id of invoker goroutine, read from its runtime g struct.
+func GoID() uint64 { return g.CurG().GoID }

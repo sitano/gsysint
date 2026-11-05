@@ -15,19 +15,21 @@ Examples
 
 Get goroutine id:
 
-    g.CurG().GoID
-    
+    gsysint.GoID()
+
     or
-    
-    GIDFromStackTrace()
+
+    gsysint.GIDFromStackTrace()
 
 Park goroutine the simple way:
 
-    var p Park
-    
+    var p park.Park
+    var m mutex.Mutex
+
     go func() {
         p.Set()
-        p.Park(nil)
+        m.Lock()
+        p.ParkUnlock(&m)
     }()
     
     // unpark goroutine and mark as ready
@@ -35,25 +37,25 @@ Park goroutine the simple way:
     
 Park goroutine harder with mutex release on park:
 
-    var gp unsafe.Pointer
+    var gp atomic.Pointer[g.G]
 
     w := sync.WaitGroup{}
     w.Add(1)
 
-    l := &g.Mutex{}
+    l := &mutex.Mutex{}
     go func() {
-        atomic.StorePointer(&gp, g.GetG())
-        Lock(l)
+        gp.Store(g.CurG())
+        l.Lock()
         w.Done()
         // park, l is released only after the goroutine is parked
-        GoParkUnlock(l, g.WaitReasonZero, trace.BlockGeneric, 1)
+        park.GoParkUnlock(l, g.WaitReasonZero, trace.BlockGeneric, 1)
     }()
 
-    w.Wait()  // goroutine has started and holds l
-    Lock(l)   // succeeds only once the goroutine is parked
+    w.Wait()   // goroutine has started and holds l
+    l.Lock()   // succeeds only once the goroutine is parked
     // unpark goroutine and mark as ready
-    GoReady((*g.G)(atomic.LoadPointer(&gp)), 1)
-    Unlock(l)
+    park.GoReady(gp.Load(), 1)
+    l.Unlock()
 
 Scheduling details
 ==================
@@ -119,7 +121,7 @@ Race detector
 `GoPark`'s `unlockf` runs on g0, which has no race context (`g.racectx == 0`).
 Under `-race`, any instrumented code there (a plain Go func, `sync`, `sync/atomic`)
 calls `__tsan_func_enter(NULL, ...)` and crashes with `SIGSEGV addr=0x10`.
-Use `ParkUnlock_c` or your own `//go:norace` function as `unlockf`.
+Use `park.ParkUnlock_c`, `park.KeepLock` or your own `//go:norace` function as `unlockf`.
 
 Author
 ===

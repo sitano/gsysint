@@ -1,4 +1,4 @@
-package gsysint
+package park
 
 import (
 	"bytes"
@@ -8,8 +8,9 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/sitano/gsysint/g"
-	"github.com/sitano/gsysint/trace"
+	"github.com/sitano/gsysint/mutex"
+	"github.com/sitano/gsysint/runtime/g"
+	"github.com/sitano/gsysint/runtime/trace"
 )
 
 func TestPark(t *testing.T) {
@@ -19,11 +20,11 @@ func TestPark(t *testing.T) {
 		w := sync.WaitGroup{}
 		w.Add(1)
 
-		l := &g.Mutex{}
+		l := &mutex.Mutex{}
 		go func() {
 			atomic.StorePointer(&gp, g.GetG())
 
-			Lock(l)
+			l.Lock()
 			w.Done()
 
 			// park
@@ -38,22 +39,22 @@ func TestPark(t *testing.T) {
 		}
 
 		// We will acquire the lock as soon as the goroutine is parked, so that we can safely unpark it.
-		Lock(l)
+		l.Lock()
 		// Unpark the goroutine and mark as ready.
 		GoReady((*g.G)(atomic.LoadPointer(&gp)), 1)
-		Unlock(l)
+		l.Unlock()
 	})
 
 	t.Run("simple api park with unlock", func(t *testing.T) {
 		var p Park
-		var m g.Mutex
+		var m mutex.Mutex
 		var w sync.WaitGroup
 
 		w.Add(1)
 		go func() {
 			p.Set()
 
-			Lock(&m)
+			m.Lock()
 			w.Done()
 
 			// park
@@ -64,23 +65,23 @@ func TestPark(t *testing.T) {
 		w.Wait()
 
 		// We will acquire the lock as soon as the goroutine is parked, so that we can safely unpark it.
-		Lock(&m)
+		m.Lock()
 		// Unpark the goroutine and mark as ready.
 		p.Ready()
-		Unlock(&m)
+		m.Unlock()
 	})
 }
 
 func TestParkLock(t *testing.T) {
 	var gp unsafe.Pointer
 	var wg1, wg2 sync.WaitGroup
-	var l g.Mutex
+	var l mutex.Mutex
 
 	wg1.Add(1)
 	wg2.Add(1)
 	go func() {
 		atomic.StorePointer(&gp, g.GetG())
-		Lock(&l)
+		l.Lock()
 		wg1.Done()
 		// unlockf runs on g0, which has no race context under -race, so it must be
 		// norace code: ParkUnlock_c releases l only once gp is _Gwaiting.
@@ -89,8 +90,8 @@ func TestParkLock(t *testing.T) {
 	}()
 
 	wg1.Wait()
-	Lock(&l) // Acquired only after the goroutine is parked.
-	Unlock(&l)
+	l.Lock() // Acquired only after the goroutine is parked.
+	l.Unlock()
 
 	stack := &bytes.Buffer{}
 	_ = pprof.Lookup("goroutine").WriteTo(stack, 1)
