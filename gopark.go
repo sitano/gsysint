@@ -26,8 +26,14 @@ func (p *Park) Ptr() unsafe.Pointer {
 
 // Park puts the current goroutine into a waiting state while holding the lock.
 func (p *Park) Park(m *g.Mutex) {
-	GoPark(func(g *g.G, p unsafe.Pointer) bool { return true }, unsafe.Pointer(m), g.WaitReasonZero, trace.BlockGeneric, 1)
+	GoPark(keepLock, unsafe.Pointer(m), g.WaitReasonZero, trace.BlockGeneric, 1)
 }
+
+// keepLock is an unlockf that parks without releasing the lock (runs on g0, see ParkUnlock_c).
+//
+//go:norace
+//go:nosplit
+func keepLock(*g.G, unsafe.Pointer) bool { return true }
 
 // GoParkUnlock puts the current goroutine into a waiting state and unlocks the lock.
 // The goroutine can be made runnable again by calling goready(gp).
@@ -55,8 +61,12 @@ func GoPark(unlockf func(*g.G, unsafe.Pointer) bool, lock unsafe.Pointer, reason
 
 // ParkUnlock_c unlocks the lock and returns true; it is an unlockf for GoPark.
 // runtime.parkunlock_c is not linkname-able since go1.23, so it is reimplemented.
+// It runs on g0, which has no race context: norace keeps -race from instrumenting it.
+//
+//go:norace
+//go:nosplit
 func ParkUnlock_c(gp *g.G, lock unsafe.Pointer) bool {
-	Unlock((*g.Mutex)(lock))
+	g.Unlock((*g.Mutex)(lock))
 	return true
 }
 

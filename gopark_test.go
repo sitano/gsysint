@@ -74,24 +74,23 @@ func TestPark(t *testing.T) {
 func TestParkLock(t *testing.T) {
 	var gp unsafe.Pointer
 	var wg1, wg2 sync.WaitGroup
+	var l g.Mutex
 
 	wg1.Add(1)
 	wg2.Add(1)
 	go func() {
 		atomic.StorePointer(&gp, g.GetG())
-		GoPark(func(g *g.G, p unsafe.Pointer) bool {
-			// Test-only hack: unlockf runs on g0 after gp is _Gwaiting, so this is a
-			// reliable "parked" signal here. Don't do this in real code: g0 can't grow
-			// its stack, be preempted or yield, so unlockf must stay tiny and nosplit-safe
-			// (e.g. an atomic store or runtime unlock), and wg.Done pulls in sync/sema
-			// and race-detector code that is not written to run on g0.
-			wg1.Done()
-			return true
-		}, nil, g.WaitReasonZero, trace.BlockGeneric, 1)
+		Lock(&l)
+		wg1.Done()
+		// unlockf runs on g0, which has no race context under -race, so it must be
+		// norace code: ParkUnlock_c releases l only once gp is _Gwaiting.
+		GoPark(ParkUnlock_c, unsafe.Pointer(&l), g.WaitReasonZero, trace.BlockGeneric, 1)
 		wg2.Done()
 	}()
 
-	wg1.Wait() // Wait until the goroutine has reached the park point.
+	wg1.Wait()
+	Lock(&l) // Acquired only after the goroutine is parked.
+	Unlock(&l)
 
 	stack := &bytes.Buffer{}
 	_ = pprof.Lookup("goroutine").WriteTo(stack, 1)

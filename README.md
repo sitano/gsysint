@@ -113,14 +113,16 @@ If there was no contention on next run slot on the `p`, `goready` can effectivel
 bring goroutine back to life omitting long passing through the run queues what
 intended to minimize latency.
 
+Race detector
+===
+
+`GoPark`'s `unlockf` runs on g0, which has no race context (`g.racectx == 0`).
+Under `-race`, any instrumented code there (a plain Go func, `sync`, `sync/atomic`)
+calls `__tsan_func_enter(NULL, ...)` and crashes with `SIGSEGV addr=0x10`.
+Use `ParkUnlock_c` or your own `//go:norace` function as `unlockf`.
+
 Author
 ===
 
 Ivan Prisyazhnyy, @john.koepi, 2019
 
-TODO
-===
-
-- `go test -race` crashes with `SIGSEGV addr=0x10` (on the g0/m0 stack) in
-  `TestPark/raw api park with unlock`, inside the `GoParkUnlock` path. Not investigated;
-  probably runtime internals not matching the race build.
